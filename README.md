@@ -4,11 +4,17 @@ This project is a real-time ball-balancing system using a Raspberry Pi, camera-b
 Software and Tools Used
 
 Raspberry Pi 5 OS** (Bookworm, 64-bit)
+
 Python 3.12+**
+
 Autodesk Fusion 360** – CAD design for mechanical parts
+
 OpenCV** (opencv-python==4.9.0.80) – Real-time computer vision
+
 NumPy** (numpy==1.26.4) – Numerical operations
+
 gpiozero** (gpiozero==1.6.2) – GPIO control of servos
+
 picamera2** (picamera2==0.3.11) – Camera capture with Raspberry Pi V2 camera
 -numpy>=1.24
 -matplotlib>=3.7
