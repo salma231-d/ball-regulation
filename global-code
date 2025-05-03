@@ -1,0 +1,146 @@
+import cv2 as cv
+import numpy as np
+import time
+from picamera2 import Picamera2
+from gpiozero import Servo
+from time import sleep
+from math import atan2, sqrt, degrees
+
+# PID class
+class PID:
+    def _init_(self, Kp, Ki, Kd, setpoint=0):
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.setpoint = setpoint
+        self.prev_error = 0
+        self.integral = 0
+
+    def compute(self, current_value, dt):
+        error = self.setpoint - current_value
+        if abs(error) < 0.005:
+            self.integral = 0
+        else:
+            self.integral += error * dt
+        derivative = (error - self.prev_error) / dt if dt > 0 else 0
+        self.prev_error = error
+        return (self.Kp * error + self.Ki * self.integral + self.Kd * derivative)
+
+# Initialisation de la caméra
+picam2 = Picamera2()
+
+# Configuration vidéo sans framerate ici
+video_config = picam2.create_video_configuration(main={"size": (640, 480)})
+picam2.configure(video_config)
+
+# Réglage du framerate à ~60 FPS
+# 1/60s = 0.016666s = 16666 microsecondes
+picam2.set_controls({"FrameDurationLimits": (16666, 16666)})
+
+picam2.start()
+
+# Initialisation des servos avec gpiozero
+servo_x = Servo(17)  # GPIO17 pour X
+servo_y = Servo(27)  # GPIO18 pour Y
+
+# PID pour X et Y
+pid_x = PID(Kp=-0.92, Ki=-1.52, Kd=-0.23)
+pid_y = PID(Kp=-0.92, Ki=-1.52, Kd=-0.23)
+
+# Variables pour la détection des cercles
+prevCircle = None
+dist = lambda x1, y1, x2, y2: (np.float64(x1) - np.float64(x2))*2 + (np.float64(y1) - np.float64(y2))*2
+PLATE_RADIUS_PIXEL = 200  # à ajuster selon l'image
+
+# Mesure du FPS effectif
+num_frames = 60
+start_time = time.perf_counter()
+for _ in range(num_frames):
+    frame = picam2.capture_array()
+end_time = time.perf_counter()
+duration = end_time - start_time
+actual_fps = num_frames / duration
+print(f"FPS mesuré : {actual_fps:.2f} (durée totale : {duration:.2f}s)")
+
+# Boucle principale
+try:
+    last_time = time.time()
+
+    while True:
+        frame = picam2.capture_array()
+
+        # Conversion en niveaux de gris
+        grayFrame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        # Application d'un flou pour réduire le bruit
+        blurFrame = cv.GaussianBlur(grayFrame, (9, 9), 2)
+
+        # Détection des cercles pour la balle
+        circles = cv.HoughCircles(blurFrame, cv.HOUGH_GRADIENT, 2, np.shape(blurFrame)[0],
+                                   param1=140, param2=110, minRadius=1, maxRadius=150)
+
+        # Détection des cercles pour le plateau
+        plateauCircles = cv.HoughCircles(blurFrame, cv.HOUGH_GRADIENT, 2, np.shape(blurFrame)[0],
+                                          param1=120, param2=150, minRadius=160, maxRadius=300)
+
+        # Création des masques
+        maskBalle = np.zeros_like(frame)
+        maskPlateau = np.zeros_like(frame)
+
+        # Traitement des cercles détectés pour la balle
+        if circles is not None:
+            circles = np.uint16(np.around(circles))
+            chosen = None
+            for i in circles[0, :]:
+                if chosen is None:
+                    chosen = i
+                if prevCircle is not None:
+                    if dist(chosen[0], chosen[1], prevCircle[0], prevCircle[1]) >= dist(i[0], i[1], prevCircle[0], prevCircle[1]):
+                        chosen = i
+            # Dessin du cercle de la balle
+            cv.circle(frame, (chosen[0], chosen[1]), 1, (0, 100, 100), 3)
+            cv.circle(frame, (chosen[0], chosen[1]), chosen[2], (255, 0, 255), 3)
+            prevCircle = chosen
+            cv.circle(maskBalle, (chosen[0], chosen[1]), chosen[2], (255, 255, 255), -1)
+
+            # Centre de l'image
+            cx = frame.shape[1] // 2
+            cy = frame.shape[0] // 2
+
+            # Position relative normalisée [-1, 1]
+            norm_x = (chosen[0] - cx) / PLATE_RADIUS_PIXEL
+            norm_y = (chosen[1] - cy) / PLATE_RADIUS_PIXEL
+
+            # PID computation
+            now = time.time()
+            dt = now - last_time
+            last_time = now
+
+            angle_x = np.clip(pid_x.compute(norm_x, dt), -1, 1)
+            angle_y = np.clip(pid_y.compute(norm_y, dt), -1, 1)
+
+            # Servo control avec gpiozero
+            servo_x.value = angle_x  # Déplacer le servo X
+            servo_y.value = angle_y  # Déplacer le servo Y
+
+        # Traitement des cercles détectés pour le plateau
+        if plateauCircles is not None:
+            plateauCircles = np.uint16(np.around(plateauCircles))
+            for i in plateauCircles[0, :]:
+                cv.circle(frame, (i[0], i[1]), 1, (0, 255, 0), 3)
+                cv.circle(frame, (i[0], i[1]), i[2], (0, 255, 0), 3)
+                cv.circle(maskPlateau, (i[0], i[1]), i[2], (255, 255, 255), -1)
+
+        # Affichages
+        cv.imshow("Circles", frame)
+        cv.imshow("Masque Balle", maskBalle)
+        cv.imshow("Masque Plateau", maskPlateau)
+
+        if cv.waitKey(1) & 0xFF == ord('q'):
+            break
+
+except KeyboardInterrupt:
+    print("Interruption détectée, arrêt du programme.")
+
+finally:
+    picam2.stop()
+    cv.destroyAllWindows()
