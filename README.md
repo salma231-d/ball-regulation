@@ -32,4 +32,4 @@ Project Structure & Delivered Files
 
 -code	-> Source code for the PID controller; Image-processing code for ball detection ; Integrated final code (Image processing + PID + motor control)
 
--test-> test of every part + simulation of the PID  (camera, motors, simulation)
+-test-> test of every part 
